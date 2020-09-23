@@ -4,10 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
-import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Message
+import android.os.*
 import android.util.Log
 import android.util.Size
 import android.view.Surface
@@ -23,7 +20,8 @@ import androidx.appcompat.app.AppCompatActivity
 class Camera2Activity : AppCompatActivity() {
 
     companion object {
-        private const val REQUIRED_SUPPORTED_HARDWARE_LEVEL = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
+        private const val REQUIRED_SUPPORTED_HARDWARE_LEVEL =
+            CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
         private const val MSG_OPEN_CAMERA = 0
         private const val MSG_CLOSE_CAMERA = 1
         private const val MSG_SET_PREVIEW_SIZE = 2
@@ -41,21 +39,28 @@ class Camera2Activity : AppCompatActivity() {
     private var captureSession: CameraCaptureSession? = null
     private var captureRequest: CaptureRequest? = null
 
-    private var frontCameraId: String? = null
-    private var frontCameraCharacteristics: CameraCharacteristics? = null
-    private var backCameraId: String? = null
-    private var backCameraCharacteristics: CameraCharacteristics? = null
-
     private val cameraPreview by lazy {
         findViewById<TextureView>(R.id.camera_preview)
     }
     private var previewSurfaceTexture: SurfaceTexture? = null
     private var previewSurface: Surface? = null
 
+
+    private var frontCameraId: String? = null
+    private var frontCameraCharacteristics: CameraCharacteristics? = null
+    private var backCameraId: String? = null
+    private var backCameraCharacteristics: CameraCharacteristics? = null
+    private var isWaitingSetPreviewSizeToCreateCaptureSession = false
+
     private val cameraHandlerThread = HandlerThread("camera").also {
         it.start()
     }
-    private data class OpenCameraMessage(val cameraId: String, val cameraStateCallback: CameraStateCallback)
+
+    private data class OpenCameraMessage(
+        val cameraId: String,
+        val cameraStateCallback: CameraStateCallback
+    )
+
     private val cameraHandler = object : Handler(cameraHandlerThread.looper) {
 
         private fun msgIdToText(msgId: Int): String {
@@ -73,9 +78,13 @@ class Camera2Activity : AppCompatActivity() {
 
         @SuppressLint("MissingPermission")
         override fun handleMessage(msg: Message) {
-            Log.d("bwl", "handle: ${msgIdToText(msg.what)}")
+            if (isDestroyed) {
+                return
+            }
+            val startTime = SystemClock.elapsedRealtime()
             when (msg.what) {
                 MSG_OPEN_CAMERA -> {
+                    isWaitingSetPreviewSizeToCreateCaptureSession = false
                     val openCameraMessage = msg.obj as OpenCameraMessage
                     val cameraId = openCameraMessage.cameraId
                     val cameraStateCallback = openCameraMessage.cameraStateCallback
@@ -86,31 +95,51 @@ class Camera2Activity : AppCompatActivity() {
                     cameraDevice = null
                 }
                 MSG_SET_PREVIEW_SIZE -> {
-                    val previewSize = getOptimalSize(cameraCharacteristics!!, SurfaceTexture::class.java, cameraPreview.width, cameraPreview.height)
-                    if (previewSize != null) {
-                        previewSurfaceTexture?.setDefaultBufferSize(previewSize.width, cameraPreview.height)
-                        previewSurface = Surface(previewSurfaceTexture)
+                    val previewSize = getOptimalSize(
+                        cameraCharacteristics!!,
+                        SurfaceTexture::class.java,
+                        cameraPreview.width,
+                        cameraPreview.height
+                    )
+                    previewSurfaceTexture?.setDefaultBufferSize(
+                        previewSize!!.width,
+                        cameraPreview.height
+                    )
+                    previewSurface = Surface(previewSurfaceTexture)
+                    if (isWaitingSetPreviewSizeToCreateCaptureSession) {
+                        isWaitingSetPreviewSizeToCreateCaptureSession = false
                         sendEmptyMessage(MSG_CREATE_CAPTURE_SESSION)
                     }
                 }
                 MSG_CREATE_CAPTURE_SESSION -> {
-                    val sessionStateCallback = SessionStateCallback()
-                    val outputs = listOf(previewSurface)
-                    cameraDevice?.createCaptureSession(outputs, sessionStateCallback, mainHandler)
+                    if (previewSurface == null) {
+                        isWaitingSetPreviewSizeToCreateCaptureSession = true
+                    } else {
+                        val sessionStateCallback = SessionStateCallback()
+                        val outputs = listOf(previewSurface)
+                        cameraDevice?.createCaptureSession(outputs, sessionStateCallback, mainHandler)
+                    }
                 }
                 MSG_CREATE_CAPTURE_REQUEST -> {
-                    val requestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW) ?: return
+                    val requestBuilder =
+                        cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW) ?: return
                     requestBuilder.addTarget(previewSurface!!)
                     captureRequest = requestBuilder.build()
                     sendEmptyMessage(MSG_START_PREVIEW)
                 }
                 MSG_START_PREVIEW -> {
-                    captureSession?.setRepeatingRequest(captureRequest!!, RepeatingCaptureStateCallback(), mainHandler)
+                    captureSession?.setRepeatingRequest(
+                        captureRequest!!,
+                        RepeatingCaptureStateCallback(),
+                        mainHandler
+                    )
                 }
                 MSG_STOP_PREVIEW -> {
                     captureSession?.stopRepeating()
                 }
             }
+            val endTime = SystemClock.elapsedRealtime()
+            Log.d("bwl", "${msgIdToText(msg.what)} used time: ${endTime - startTime}ms")
         }
     }
     private val mainHandler = Handler()
@@ -119,7 +148,7 @@ class Camera2Activity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera2)
         val cameraIdList = cameraManager.cameraIdList
-        cameraIdList.forEach {cameraId ->
+        cameraIdList.forEach { cameraId ->
             val cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
             if (cameraCharacteristics.isHardwareLevelSupported(REQUIRED_SUPPORTED_HARDWARE_LEVEL)) {
                 if (cameraCharacteristics[CameraCharacteristics.LENS_FACING] == CameraCharacteristics.LENS_FACING_FRONT) {
@@ -146,6 +175,7 @@ class Camera2Activity : AppCompatActivity() {
 
     private fun openCamera() {
         val cameraId = backCameraId ?: frontCameraId
+        cameraCharacteristics = backCameraCharacteristics ?: frontCameraCharacteristics
         if (cameraId != null) {
             val openCameraMessage = OpenCameraMessage(cameraId, CameraStateCallback())
             cameraHandler?.obtainMessage(MSG_OPEN_CAMERA, openCameraMessage).sendToTarget()
@@ -155,15 +185,23 @@ class Camera2Activity : AppCompatActivity() {
     }
 
     @WorkerThread
-    private fun getOptimalSize(cameraCharacteristics: CameraCharacteristics, clazz: Class<*>, maxWith: Int, maxHeight: Int): Size? {
+    private fun getOptimalSize(
+        cameraCharacteristics: CameraCharacteristics,
+        clazz: Class<*>,
+        maxWith: Int,
+        maxHeight: Int
+    ): Size? {
         val aspectRatio = maxWith.toFloat() / maxHeight
-        val streamConfigurationMap = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val streamConfigurationMap =
+            cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val supportedSizes = streamConfigurationMap?.getOutputSizes(clazz)
 
         var targetSize: Size? = null
         var targetRatioDiff = Float.MAX_VALUE
+        Log.d("bwl", "getOptimalSize: maxWidth = $maxWith, maxHeight = $maxHeight")
         if (supportedSizes != null) {
             for (size in supportedSizes) {
+                Log.d("bwl", "$size")
                 if (size.height <= maxHeight) {
                     if (size.width.toFloat() / size.height - aspectRatio < targetRatioDiff) {
                         targetRatioDiff = size.width.toFloat() / size.height - aspectRatio
@@ -176,15 +214,19 @@ class Camera2Activity : AppCompatActivity() {
     }
 
     private fun closeCamera() {
+        stopPreview()
         cameraHandler.sendEmptyMessage(MSG_CLOSE_CAMERA)
+    }
+
+    private fun stopPreview() {
+        cameraHandler.sendEmptyMessage(MSG_STOP_PREVIEW)
     }
 
     private inner class CameraStateCallback : CameraDevice.StateCallback() {
         @WorkerThread
         override fun onOpened(camera: CameraDevice) {
             cameraDevice = camera
-            cameraCharacteristics = cameraManager.getCameraCharacteristics(camera.id)
-            cameraHandler.sendEmptyMessage(MSG_SET_PREVIEW_SIZE)
+            cameraHandler.sendEmptyMessage(MSG_CREATE_CAPTURE_SESSION)
             runOnUiThread {
                 Toast.makeText(this@Camera2Activity, "相机已开启", Toast.LENGTH_SHORT).show()
             }
@@ -223,6 +265,7 @@ class Camera2Activity : AppCompatActivity() {
         @MainThread
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture?, width: Int, height: Int) {
             previewSurfaceTexture = surface
+            cameraHandler.sendEmptyMessage(MSG_SET_PREVIEW_SIZE)
         }
     }
 
