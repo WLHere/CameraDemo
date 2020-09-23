@@ -1,6 +1,5 @@
 package com.bwl.camera
 
-import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -11,6 +10,12 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val REQUEST_PERMISSION_CODE = 1
+        private val REQUIRED_PERMISSIONS = arrayOf(android.Manifest.permission.CAMERA, android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -23,21 +28,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun gotoPreview() {
-        startActivity(Intent(this, PreviewActivity::class.java))
+        startActivity(Intent(this, Camera2Activity::class.java))
     }
 
     private fun checkPermission(): Boolean {
-        return if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            true
-        } else {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 0)
-            false
+        val deniedPermissions = mutableListOf<String>()
+        for (permission in REQUIRED_PERMISSIONS) {
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+                deniedPermissions.add(permission)
+            }
         }
+        if (deniedPermissions.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, deniedPermissions.toTypedArray(), REQUEST_PERMISSION_CODE)
+        }
+        return deniedPermissions.isEmpty()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 0) {
+        if (requestCode == REQUEST_PERMISSION_CODE) {
             var isOk = true
             grantResults.forEach {
                 if (it != PackageManager.PERMISSION_GRANTED) {
@@ -47,7 +56,7 @@ class MainActivity : AppCompatActivity() {
             if (isOk) {
                 gotoPreview()
             } else {
-                Toast.makeText(this, "需要摄像头权限", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "需要权限", Toast.LENGTH_SHORT).show()
             }
         }
     }
