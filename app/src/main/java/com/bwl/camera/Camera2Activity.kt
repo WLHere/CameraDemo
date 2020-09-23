@@ -9,6 +9,7 @@ import android.util.Log
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
+import android.view.View
 import android.widget.Toast
 import androidx.annotation.MainThread
 import androidx.annotation.WorkerThread
@@ -39,6 +40,9 @@ class Camera2Activity : AppCompatActivity() {
     private var captureSession: CameraCaptureSession? = null
     private var captureRequest: CaptureRequest? = null
 
+    private val contentLayout by lazy {
+        findViewById<View>(R.id.content_layout)
+    }
     private val cameraPreview by lazy {
         findViewById<TextureView>(R.id.camera_preview)
     }
@@ -98,11 +102,22 @@ class Camera2Activity : AppCompatActivity() {
                     val previewSize = getOptimalSize(
                         cameraCharacteristics!!,
                         SurfaceTexture::class.java,
-                        cameraPreview.width,
-                        cameraPreview.height
-                    )
+                        contentLayout.width,
+                        contentLayout.height
+                    )?: return
+                    // 更新TextureView的高度，以适配预览比例
+                    cameraPreview.post {
+                        val lp = cameraPreview.layoutParams
+                        lp.height = (previewSize.height.toFloat() / previewSize.width * cameraPreview.width).toInt()
+                        if (lp.height > contentLayout.height) {
+                            lp.height = contentLayout.height
+                            lp.width = (previewSize.width.toFloat() / previewSize.height * cameraPreview.height).toInt()
+                        }
+                        cameraPreview.layoutParams = lp
+                    }
+
                     previewSurfaceTexture?.setDefaultBufferSize(
-                        previewSize!!.width,
+                        previewSize.width,
                         cameraPreview.height
                     )
                     previewSurface = Surface(previewSurfaceTexture)
@@ -202,7 +217,7 @@ class Camera2Activity : AppCompatActivity() {
         if (supportedSizes != null) {
             for (size in supportedSizes) {
                 Log.d("bwl", "$size")
-                if (size.height <= maxHeight) {
+                if (size.height <= maxWith) {
                     if (size.width.toFloat() / size.height - aspectRatio < targetRatioDiff) {
                         targetRatioDiff = size.width.toFloat() / size.height - aspectRatio
                         targetSize = size
